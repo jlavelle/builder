@@ -1,21 +1,13 @@
 {-# LANGUAGE KindSignatures             #-}
 {-# LANGUAGE TypeFamilies               #-}
-{-# LANGUAGE TypeFamilyDependencies     #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE TypeOperators              #-}
-{-# LANGUAGE RankNTypes                 #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE StandaloneDeriving         #-}
 {-# LANGUAGE DeriveFunctor              #-}
 {-# LANGUAGE FlexibleContexts           #-}
-{-# LANGUAGE FlexibleInstances          #-}
-{-# LANGUAGE MultiParamTypeClasses      #-}
-{-# LANGUAGE FunctionalDependencies     #-}
-{-# LANGUAGE UndecidableInstances       #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TypeApplications           #-}
-{-# LANGUAGE ViewPatterns               #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE PolyKinds                  #-}
 
@@ -195,7 +187,7 @@ buildIO (K i :* _) g = case TG.topSort g of
     pure $ fmap unsafeFromAny r
   where
     initCache :: [Int] -> IO (IntMap (MVar Any))
-    initCache = fmap M.fromList . traverse (\x -> (x,) <$> newEmptyMVar)
+    initCache = foldMap (\i -> M.singleton i <$> newEmptyMVar)
 
     mkBuilder :: IntMap (MVar Any) -> WithId Int (ExistsK IO) -> IO ()
     mkBuilder m (WithId i (ExistsK ad act ds)) = void $ forkIO $ do
@@ -205,7 +197,7 @@ buildIO (K i :* _) g = case TG.topSort g of
       r <- act ds'
       putMVar mv $ unsafeToAny r
       where
-        filteredRead = traverse readMVar $ M.restrictKeys m (S.fromList $ toIntList ds)
+        filteredRead = traverse readMVar $ M.restrictKeys m $ S.fromList $ toIntList ds
 
 -- Internal function used by build/buildIO
 fetchDeps :: Dict (All Top) xs -> Depends xs -> IntMap Any -> NP I xs
