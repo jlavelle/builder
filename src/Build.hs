@@ -10,6 +10,7 @@
 {-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE PolyKinds                  #-}
+{-# LANGUAGE TemplateHaskell            #-}
 
 module Build where
 
@@ -23,10 +24,10 @@ import Control.Monad.State (StateT, gets, modify, runStateT)
 import Data.Functor.Identity (Identity)
 import Data.Functor (($>), (<$), (<&>), void)
 import Data.IntMap (IntMap)
-import Data.IntSet (IntSet)
 import qualified Data.IntSet as S
 import Data.Maybe (fromJust)
 import Data.Foldable (traverse_)
+import Data.Function ((&))
 import qualified Data.IntMap as M
 import Unsafe.Coerce (unsafeCoerce)
 import Control.Concurrent (MVar, newEmptyMVar, readMVar, putMVar, takeMVar, forkIO)
@@ -34,6 +35,9 @@ import Data.SOP (NP(..), I(..), K(..), All(..), Top(..))
 import qualified Data.SOP as SOP
 import qualified Data.SOP.NP as SOP
 import Data.SOP.Dict (pureAll, Dict(..))
+import Lens.Micro.TH (makeLenses)
+import Lens.Micro ((%~))
+import Lens.Micro.Mtl ((%=), (+=), use)
 
 type family Append xs ys where
   Append '[] ys = ys
@@ -106,10 +110,12 @@ produce act = depend act Nil
 type BuildT m n a = FreeT (BuildF m) n a
 
 data SEnv m = SEnv
-  { senvNextId :: Int
-  , senvMap    :: IntMap (ExistsK m)
-  , senvGraph  :: Graph Int
+  { _nextId    :: Int
+  , _existsMap :: IntMap (ExistsK m)
+  , _depGraph  :: Graph Int
   }
+
+makeLenses ''SEnv
 
 toIntList :: Depends xs -> [Int]
 toIntList d = SOP.collapse_NP d
@@ -135,23 +141,19 @@ interpretS = iterTM go
   where
     -- Have to manually bring `as` and `b` into scope for `uncurryN` and `next`
     go (Depend ad (act :: Args as (m b)) ds (next :: Produce b -> SI m n a)) = do
-      i <- nextId
+      i <- use nextId <* (nextId += 1)
       case ds of
         Nil -> insertDep i [] (ExistsK ad (const act) ds)
         _   -> insertDep i (toIntList ds) (ExistsK ad (uncurryN @as @(m b) act) ds)
       next $ K i :* Nil
 
-    nextId = gets senvNextId <* modify (\e -> e { senvNextId = senvNextId e + 1 })
-
-    insertDep i ds k = modify go
-      where
-        go e = e { senvMap   = M.insert i k (senvMap e)
-                 , senvGraph = G.overlay (G.star i ds) (senvGraph e)
-                 }
+    insertDep i ds k = do
+      existsMap %= M.insert i k
+      depGraph  %= G.overlay (G.star i ds)
 
 -- Turns out having the full graph isn't actually very useful, except for debugging/testing
-fullGraphS :: Monad n => StateT (SEnv m) n a -> n ((a, Maybe (DepGraph m)))
-fullGraphS m = runStateT m emptyEnv <&> \(a, e) -> (a, buildDepGraph (senvMap e) (senvGraph e))
+fullGraphS :: Monad n => SI m n a -> n ((a, Maybe (DepGraph m)))
+fullGraphS m = runStateT m emptyEnv <&> \(a, e) -> (a, buildDepGraph (_existsMap e) (_depGraph e))
 
 fullGraph :: Monad n => BuildT m n a -> n ((a, Maybe (DepGraph m)))
 fullGraph = fullGraphS . interpretS
@@ -161,7 +163,7 @@ graphOf :: Monad n => BuildT m n (Produce a) -> n (Produce a, DepGraph m)
 graphOf b = runStateT (interpretS b) emptyEnv <&> go
   where
     go :: (Produce a, SEnv m) -> (Produce a, DepGraph m)
-    go (p@(K i :* Nil), env) = (p, buildGraphOf i (senvMap env))
+    go (p@(K i :* Nil), env) = (p, buildGraphOf i (_existsMap env))
 
 build :: forall m a. Monad m => Produce a -> DepGraph m -> m (Maybe a)
 build (K i :* _) g = case TG.topSort g of

@@ -20,6 +20,9 @@ library
                      , algebraic-graphs
                      , containers
                      , sop-core
+                     , microlens
+                     , microlens-th
+                     , microlens-mtl
   hs-source-dirs:      src
   default-language:    Haskell2010
 
